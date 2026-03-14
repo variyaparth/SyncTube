@@ -64,3 +64,18 @@ http://localhost:3000
 
 - Rooms are stored in memory, so they reset when the server restarts.
 - This is intended for single-server usage without persistence.
+
+## Deploy From GitHub
+
+This project cannot run on GitHub Pages because it needs a live Node.js server and Socket.IO connection.
+
+Use GitHub as the source repo and deploy it on Render instead:
+
+1. Push your code to GitHub.
+2. Open Render and choose **New Web Service**.
+3. Connect your GitHub account.
+4. Select the repository: `variyaparth/SyncTube`.
+5. Render will detect the included `render.yaml` file automatically.
+6. Deploy the service.
+
+After deployment, Render will give you a public live URL for SyncTube.
