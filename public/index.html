@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SyncTube - Watch Together</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body class="landing-page">
+    <main class="landing-container">
+      <section class="card hero-card">
+        <h1>SyncTube</h1>
+        <p>Watch YouTube videos together in real-time.</p>
+      </section>
+
+      <section class="card forms-grid">
+        <form id="create-room-form" class="form-block">
+          <h2>Create Room</h2>
+          <label for="create-username">Username</label>
+          <input id="create-username" type="text" maxlength="24" required placeholder="Your name" />
+
+          <label for="video-url">YouTube URL or Video ID</label>
+          <input id="video-url" type="text" required placeholder="https://www.youtube.com/watch?v=..." />
+
+          <button type="submit">Create Room</button>
+        </form>
+
+        <form id="join-room-form" class="form-block">
+          <h2>Join Room</h2>
+          <label for="join-username">Username</label>
+          <input id="join-username" type="text" maxlength="24" required placeholder="Your name" />
+
+          <label for="room-id">Room ID</label>
+          <input id="room-id" type="text" maxlength="12" required placeholder="e.g. A1B2C3" />
+
+          <button type="submit">Join Room</button>
+        </form>
+      </section>
+    </main>
+
+    <script src="client.js"></script>
+  </body>
+</html>

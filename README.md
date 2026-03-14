@@ -1,0 +1,66 @@
+# SyncTube
+
+SyncTube is a full-stack web app where friends watch the same YouTube video together in real-time.
+
+## Features
+
+- Create watch rooms with random room IDs
+- Share invite links so friends can join instantly
+- Embedded YouTube player with synchronized playback
+- Host-only playback controls (play/pause/seek/load video)
+- Live chat for all room members
+- Real-time user list with host indicator
+- Join/leave system notifications
+- Late joiners automatically sync to the current playback time
+
+## Tech Stack
+
+- Frontend: HTML, CSS, Vanilla JavaScript, YouTube IFrame Player API
+- Backend: Node.js, Express.js, Socket.IO
+
+## Project Structure
+
+```text
+.
+├── server.js
+├── package.json
+├── README.md
+└── public/
+    ├── index.html
+    ├── room.html
+    ├── style.css
+    └── client.js
+```
+
+## Run Locally
+
+1. Install dependencies:
+
+```bash
+npm install
+```
+
+2. Start the server:
+
+```bash
+npm start
+```
+
+3. Open in browser:
+
+```text
+http://localhost:3000
+```
+
+## How to Use
+
+1. Enter a username and a YouTube URL/ID, then click **Create Room**.
+2. Copy the invite link and send it to friends.
+3. Friends join using the link (or room ID + username) and must enter a nickname.
+4. The host controls playback; all viewers stay synchronized.
+5. Use live chat to communicate in the room.
+
+## Notes
+
+- Rooms are stored in memory, so they reset when the server restarts.
+- This is intended for single-server usage without persistence.
