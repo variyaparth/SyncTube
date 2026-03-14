@@ -4,10 +4,18 @@ const http = require("http");
 const { Server } = require("socket.io");
 
 const PORT = process.env.PORT || 3000;
+const HOST = process.env.HOST || "0.0.0.0";
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
+const io = new Server(server, {
+  cors: {
+    origin: true,
+    methods: ["GET", "POST"],
+  },
+  pingInterval: 25000,
+  pingTimeout: 20000,
+});
 const MAX_CHAT_HISTORY = 200;
 
 // In-memory room store (fine for local dev / single instance deployment).
@@ -15,6 +23,10 @@ const rooms = new Map();
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
+
+app.get("/health", (_req, res) => {
+  res.status(200).json({ status: "ok" });
+});
 
 function generateRoomId(length = 6) {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -331,6 +343,28 @@ io.on("connection", (socket) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`SyncTube server is running on http://localhost:${PORT}`);
+server.listen(PORT, HOST, () => {
+  console.log(`SyncTube server is running on http://${HOST}:${PORT}`);
 });
+
+function shutdown(signal) {
+  console.log(`Received ${signal}. Shutting down gracefully...`);
+
+  io.close(() => {
+    server.close((error) => {
+      if (error) {
+        console.error("Error while shutting down server:", error);
+        process.exit(1);
+      }
+
+      process.exit(0);
+    });
+  });
+
+  setTimeout(() => {
+    process.exit(1);
+  }, 10000).unref();
+}
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));

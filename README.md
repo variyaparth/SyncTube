@@ -79,3 +79,17 @@ Use GitHub as the source repo and deploy it on Render instead:
 6. Deploy the service.
 
 After deployment, Render will give you a public live URL for SyncTube.
+
+## Deploy On Koyeb
+
+This project is now prepared for Koyeb using the included Dockerfile.
+
+1. Push the latest code to GitHub.
+2. Sign in to Koyeb and create a new Web Service from GitHub.
+3. Select the repository: `variyaparth/SyncTube`.
+4. Choose Docker-based deployment.
+5. Set the exposed port to `3000` if Koyeb asks for it.
+6. Set the health check path to `/health`.
+7. Deploy the service.
+
+Koyeb will build the image using [Dockerfile](Dockerfile) and expose the app publicly after the health check passes.
