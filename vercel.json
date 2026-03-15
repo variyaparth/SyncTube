@@ -1,9 +1,0 @@
-{
-  "redirects": [
-    {
-      "source": "/(.*)",
-      "destination": "https://synctube-parth.up.railway.app/$1",
-      "permanent": false
-    }
-  ]
-}
