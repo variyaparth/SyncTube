@@ -157,6 +157,7 @@
   let hostSeekWatchInterval = null;
   let viewerResyncInterval = null;
   let hostLastObservedTime = 0;
+  let youtubeApiPromise = null;
 
   const CLOCK_DRIFT_SOFT_THRESHOLD = 0.9;
   const CLOCK_DRIFT_HARD_THRESHOLD = 1.8;
@@ -260,7 +261,11 @@
   }
 
   function loadYouTubeApi() {
-    return new Promise((resolve) => {
+    if (youtubeApiPromise) {
+      return youtubeApiPromise;
+    }
+
+    youtubeApiPromise = new Promise((resolve) => {
       const existingScript = document.getElementById("youtube-api-script");
 
       if (existingScript) {
@@ -279,7 +284,11 @@
       window.onYouTubeIframeAPIReady = resolve;
       document.body.appendChild(script);
     });
+
+    return youtubeApiPromise;
   }
+
+  const youtubeApiReady = loadYouTubeApi();
 
   function emitHostControl(type, payload = {}) {
     if (!isHost) {
@@ -532,7 +541,7 @@
       });
     }
 
-    await loadYouTubeApi();
+    await youtubeApiReady;
     buildPlayer(state.videoId);
   });
 
