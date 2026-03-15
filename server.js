@@ -128,6 +128,14 @@ function serializeUsers(room) {
   }));
 }
 
+function appendChatHistory(room, messageEntry) {
+  room.chatHistory.push(messageEntry);
+
+  if (room.chatHistory.length > MAX_CHAT_HISTORY) {
+    room.chatHistory.splice(0, room.chatHistory.length - MAX_CHAT_HISTORY);
+  }
+}
+
 app.post("/api/create-room", (req, res) => {
   const roomId = getUniqueRoomId();
   const videoId = sanitizeVideoId(req.body?.videoId);
@@ -162,7 +170,7 @@ app.get("/api/room/:roomId", (req, res) => {
 });
 
 io.on("connection", (socket) => {
-  socket.on("join-room", ({ roomId, username, hostKey, bootstrapVideoId }) => {
+  socket.on("join-room", ({ roomId, username, hostKey, bootstrapVideoId } = {}) => {
     const normalizedRoomId = String(roomId || "").trim().toUpperCase();
 
     if (!normalizedRoomId) {
@@ -220,6 +228,16 @@ io.on("connection", (socket) => {
       hostSocketId: room.hostSocketId,
     });
 
+    const joinSystemMessage = {
+      username: "System",
+      message: `${safeUsername} joined the room.`,
+      timestamp: Date.now(),
+      system: true,
+    };
+
+    appendChatHistory(room, joinSystemMessage);
+    io.to(normalizedRoomId).emit("chat-message", joinSystemMessage);
+
     socket.to(normalizedRoomId).emit("user-joined", {
       username: safeUsername,
       users: serializeUsers(room),
@@ -231,7 +249,7 @@ io.on("connection", (socket) => {
     });
   });
 
-  socket.on("chat-message", ({ message }) => {
+  socket.on("chat-message", ({ message } = {}) => {
     const roomId = socket.data.roomId;
 
     if (!roomId || !rooms.has(roomId)) {
@@ -254,18 +272,14 @@ io.on("connection", (socket) => {
       timestamp,
     });
 
-    room.chatHistory.push({
+    appendChatHistory(room, {
       username: socket.data.username,
       message: text,
       timestamp,
     });
-
-    if (room.chatHistory.length > MAX_CHAT_HISTORY) {
-      room.chatHistory.splice(0, room.chatHistory.length - MAX_CHAT_HISTORY);
-    }
   });
 
-  socket.on("host-control", ({ type, currentTime, videoId, isPlaying }) => {
+  socket.on("host-control", ({ type, currentTime, videoId, isPlaying } = {}) => {
     const roomId = socket.data.roomId;
 
     if (!roomId || !rooms.has(roomId)) {
@@ -359,6 +373,16 @@ io.on("connection", (socket) => {
       socket.to(roomId).emit("user-left", {
         username: leavingUser.username,
       });
+
+      const leaveSystemMessage = {
+        username: "System",
+        message: `${leavingUser.username} left the room.`,
+        timestamp: Date.now(),
+        system: true,
+      };
+
+      appendChatHistory(room, leaveSystemMessage);
+      io.to(roomId).emit("chat-message", leaveSystemMessage);
     }
 
     // If host leaves, transfer host role to the first remaining user.

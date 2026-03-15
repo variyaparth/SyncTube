@@ -161,6 +161,8 @@
   let lastViewerCorrectionAt = 0;
   let joinRetryCount = 0;
   let joinRetryTimer = null;
+  let playerReady = false;
+  let queuedSyncEvent = null;
 
   const CLOCK_DRIFT_SOFT_THRESHOLD = 1.2;
   const CLOCK_DRIFT_HARD_THRESHOLD = 2.6;
@@ -207,7 +209,19 @@
   function renderUsers(users, hostSocketId) {
     userList.innerHTML = "";
 
-    users.forEach((user) => {
+    const sortedUsers = [...users].sort((left, right) => {
+      if (left.socketId === hostSocketId) {
+        return -1;
+      }
+
+      if (right.socketId === hostSocketId) {
+        return 1;
+      }
+
+      return left.username.localeCompare(right.username);
+    });
+
+    sortedUsers.forEach((user) => {
       const li = document.createElement("li");
       li.textContent = user.username;
 
@@ -430,8 +444,29 @@
       },
       events: {
         onReady: () => {
+          playerReady = true;
+
           if (joinedRoomState) {
             applyPlaybackState(joinedRoomState.playback, joinedRoomState.videoId);
+          }
+
+          if (queuedSyncEvent) {
+            const pendingEvent = queuedSyncEvent;
+            queuedSyncEvent = null;
+
+            if (!isHost) {
+              if (pendingEvent.type === "sync-state") {
+                applyPlaybackState(
+                  {
+                    currentTime: expectedTimeFromServer(pendingEvent),
+                    isPlaying: pendingEvent.isPlaying,
+                  },
+                  pendingEvent.videoId
+                );
+              } else {
+                applyClockCorrection(pendingEvent, pendingEvent.type !== "clock");
+              }
+            }
           }
 
           if (isHost) {
@@ -489,6 +524,11 @@
 
   loadVideoBtn.addEventListener("click", () => {
     if (!isHost) {
+      return;
+    }
+
+    if (!playerReady || !player || typeof player.loadVideoById !== "function") {
+      alert("Player is still loading. Please try again in a moment.");
       return;
     }
 
@@ -563,22 +603,6 @@
       addChatMessage(chat);
     });
 
-    addChatMessage({
-      username: "System",
-      message: `You joined room ${state.roomId}.`,
-      timestamp: Date.now(),
-      system: true,
-    });
-
-    if (!state.hostSocketId) {
-      addChatMessage({
-        username: "System",
-        message: "Waiting for the host to join the room.",
-        timestamp: Date.now(),
-        system: true,
-      });
-    }
-
     await youtubeApiReady;
     buildPlayer(state.videoId);
   });
@@ -618,30 +642,17 @@
     });
   });
 
-  socket.on("user-joined", ({ username: joinedName }) => {
-    addChatMessage({
-      username: "System",
-      message: `${joinedName} joined the room.`,
-      timestamp: Date.now(),
-      system: true,
-    });
-  });
-
-  socket.on("user-left", ({ username: leftName }) => {
-    addChatMessage({
-      username: "System",
-      message: `${leftName} left the room.`,
-      timestamp: Date.now(),
-      system: true,
-    });
-  });
-
   socket.on("chat-message", (payload) => {
     addChatMessage(payload);
   });
 
   socket.on("sync-event", (event) => {
-    if (!player || isHost) {
+    if (isHost) {
+      return;
+    }
+
+    if (!player || !playerReady) {
+      queuedSyncEvent = event;
       return;
     }
 
