@@ -158,9 +158,14 @@
   let viewerResyncInterval = null;
   let hostLastObservedTime = 0;
   let youtubeApiPromise = null;
+  let lastViewerCorrectionAt = 0;
+  let joinRetryCount = 0;
+  let joinRetryTimer = null;
 
-  const CLOCK_DRIFT_SOFT_THRESHOLD = 0.9;
-  const CLOCK_DRIFT_HARD_THRESHOLD = 1.8;
+  const CLOCK_DRIFT_SOFT_THRESHOLD = 1.2;
+  const CLOCK_DRIFT_HARD_THRESHOLD = 2.6;
+  const MIN_CORRECTION_INTERVAL_MS = 1200;
+  const MAX_JOIN_RETRIES = 8;
 
   function expectedTimeFromServer({ currentTime, isPlaying, serverSentAt }) {
     const base = Math.max(0, Number(currentTime) || 0);
@@ -243,7 +248,7 @@
       clearInterval(viewerResyncInterval);
       viewerResyncInterval = setInterval(() => {
         socket.emit("request-sync");
-      }, 6000);
+      }, 3000);
     } else {
       clearInterval(viewerResyncInterval);
       viewerResyncInterval = null;
@@ -301,6 +306,10 @@
     });
   }
 
+  function emitJoinRoom() {
+    socket.emit("join-room", { roomId, username, hostKey, bootstrapVideoId });
+  }
+
   function applyPlaybackState(playback, videoId) {
     if (!player || typeof player.seekTo !== "function") {
       return;
@@ -341,23 +350,32 @@
       return;
     }
 
+    const now = Date.now();
     const expectedTime = expectedTimeFromServer(event);
     const localTime = Number(player.getCurrentTime?.()) || 0;
     const drift = Math.abs(localTime - expectedTime);
-    const shouldSeek = forceSeek || drift > CLOCK_DRIFT_HARD_THRESHOLD;
+    const allowSoftCorrection = now - lastViewerCorrectionAt >= MIN_CORRECTION_INTERVAL_MS;
+    const shouldSeekHard = forceSeek || drift > CLOCK_DRIFT_HARD_THRESHOLD;
+    const shouldSeekSoft =
+      !shouldSeekHard &&
+      drift > CLOCK_DRIFT_SOFT_THRESHOLD &&
+      allowSoftCorrection &&
+      Boolean(event.isPlaying);
 
-    if (shouldSeek) {
+    if (shouldSeekHard) {
       applyingRemoteSync = true;
       player.seekTo(expectedTime, true);
+      lastViewerCorrectionAt = now;
       setTimeout(() => {
         applyingRemoteSync = false;
-      }, 140);
-    } else if (drift > CLOCK_DRIFT_SOFT_THRESHOLD) {
+      }, 130);
+    } else if (shouldSeekSoft) {
       applyingRemoteSync = true;
       player.seekTo(expectedTime, true);
+      lastViewerCorrectionAt = now;
       setTimeout(() => {
         applyingRemoteSync = false;
-      }, 80);
+      }, 70);
     }
 
     if (event.isPlaying) {
@@ -407,6 +425,8 @@
       videoId: initialVideoId,
       playerVars: {
         rel: 0,
+        playsinline: 1,
+        modestbranding: 1,
       },
       events: {
         onReady: () => {
@@ -507,15 +527,33 @@
   });
 
   socket.on("connect", () => {
-    socket.emit("join-room", { roomId, username, hostKey, bootstrapVideoId });
+    clearTimeout(joinRetryTimer);
+    joinRetryCount = 0;
+    emitJoinRoom();
   });
 
   socket.on("room-error", (message) => {
+    const normalizedMessage = String(message || "").toLowerCase();
+
+    if (normalizedMessage.includes("room not found") && joinRetryCount < MAX_JOIN_RETRIES) {
+      const retryDelay = Math.min(3500, 500 * (joinRetryCount + 1));
+      joinRetryCount += 1;
+
+      clearTimeout(joinRetryTimer);
+      joinRetryTimer = setTimeout(() => {
+        emitJoinRoom();
+      }, retryDelay);
+      return;
+    }
+
     alert(message || "Could not join room.");
     window.location.href = "/";
   });
 
   socket.on("joined-room", async (state) => {
+    clearTimeout(joinRetryTimer);
+    joinRetryCount = 0;
+
     joinedRoomState = state;
     setHostMode(state.isHost);
     renderUsers(state.users, state.hostSocketId);
