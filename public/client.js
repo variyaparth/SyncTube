@@ -67,8 +67,11 @@
           throw new Error("Could not create room");
         }
 
-        const { roomId } = await response.json();
+        const { roomId, hostKey } = await response.json();
         const nextUrl = new URL("/room.html", window.location.origin);
+
+        sessionStorage.setItem(`synctube-host-key:${roomId}`, hostKey);
+        sessionStorage.setItem(`synctube-bootstrap-video:${roomId}`, videoId);
 
         nextUrl.searchParams.set("room", roomId);
         nextUrl.searchParams.set("username", username);
@@ -107,6 +110,10 @@
   const params = new URLSearchParams(window.location.search);
   const roomId = (params.get("room") || "").trim().toUpperCase();
   let username = (params.get("username") || "").trim();
+  const hostKey = roomId ? sessionStorage.getItem(`synctube-host-key:${roomId}`) || "" : "";
+  const bootstrapVideoId = roomId
+    ? sessionStorage.getItem(`synctube-bootstrap-video:${roomId}`) || ""
+    : "";
 
   if (!roomId) {
     alert("Missing room ID. Please return to the home page.");
@@ -210,6 +217,7 @@
   }
 
   function setHostMode(nextIsHost) {
+    const wasHost = isHost;
     isHost = Boolean(nextIsHost);
     hostStatus.textContent = isHost ? "Host" : "Viewer";
     hostStatus.style.color = isHost ? "var(--success)" : "var(--muted)";
@@ -238,6 +246,16 @@
     } else {
       clearInterval(viewerResyncInterval);
       viewerResyncInterval = null;
+
+      if (!wasHost && player && typeof player.getCurrentTime === "function") {
+        hostLastObservedTime = player.getCurrentTime();
+        startHostSyncIntervals();
+
+        emitHostControl("time-update", {
+          isPlaying: player.getPlayerState?.() === YT.PlayerState.PLAYING,
+          currentTime: player.getCurrentTime(),
+        });
+      }
     }
   }
 
@@ -480,7 +498,7 @@
   });
 
   socket.on("connect", () => {
-    socket.emit("join-room", { roomId, username });
+    socket.emit("join-room", { roomId, username, hostKey, bootstrapVideoId });
   });
 
   socket.on("room-error", (message) => {
@@ -504,6 +522,15 @@
       timestamp: Date.now(),
       system: true,
     });
+
+    if (!state.hostSocketId) {
+      addChatMessage({
+        username: "System",
+        message: "Waiting for the host to join the room.",
+        timestamp: Date.now(),
+        system: true,
+      });
+    }
 
     await loadYouTubeApi();
     buildPlayer(state.videoId);

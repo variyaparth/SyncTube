@@ -49,6 +49,17 @@ function getUniqueRoomId() {
   return roomId;
 }
 
+function generateHostKey(length = 24) {
+  const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  let hostKey = "";
+
+  for (let index = 0; index < length; index += 1) {
+    hostKey += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+
+  return hostKey;
+}
+
 function sanitizeUsername(username) {
   const fallback = "Guest";
 
@@ -120,10 +131,12 @@ function serializeUsers(room) {
 app.post("/api/create-room", (req, res) => {
   const roomId = getUniqueRoomId();
   const videoId = sanitizeVideoId(req.body?.videoId);
+  const hostKey = generateHostKey();
 
   rooms.set(roomId, {
     id: roomId,
     hostSocketId: null,
+    hostKey,
     videoId,
     users: new Map(),
     chatHistory: [],
@@ -134,7 +147,7 @@ app.post("/api/create-room", (req, res) => {
     },
   });
 
-  res.json({ roomId });
+  res.json({ roomId, hostKey });
 });
 
 app.get("/api/room/:roomId", (req, res) => {
@@ -149,12 +162,37 @@ app.get("/api/room/:roomId", (req, res) => {
 });
 
 io.on("connection", (socket) => {
-  socket.on("join-room", ({ roomId, username }) => {
+  socket.on("join-room", ({ roomId, username, hostKey, bootstrapVideoId }) => {
     const normalizedRoomId = String(roomId || "").trim().toUpperCase();
 
-    if (!normalizedRoomId || !rooms.has(normalizedRoomId)) {
+    if (!normalizedRoomId) {
       socket.emit("room-error", "Room not found. Please check the invite link.");
       return;
+    }
+
+    if (!rooms.has(normalizedRoomId)) {
+      const safeBootstrapVideoId = sanitizeVideoId(bootstrapVideoId);
+      const canBootstrapRoom =
+        typeof hostKey === "string" && hostKey.trim().length >= 12 && Boolean(safeBootstrapVideoId);
+
+      if (!canBootstrapRoom) {
+        socket.emit("room-error", "Room not found. Please check the invite link.");
+        return;
+      }
+
+      rooms.set(normalizedRoomId, {
+        id: normalizedRoomId,
+        hostSocketId: null,
+        hostKey: hostKey.trim(),
+        videoId: safeBootstrapVideoId,
+        users: new Map(),
+        chatHistory: [],
+        playback: {
+          isPlaying: false,
+          currentTime: 0,
+          lastUpdateAt: Date.now(),
+        },
+      });
     }
 
     const room = rooms.get(normalizedRoomId);
@@ -166,8 +204,9 @@ io.on("connection", (socket) => {
 
     room.users.set(socket.id, { username: safeUsername });
 
-    // First user becomes host.
-    if (!room.hostSocketId) {
+    const isReservedHost = typeof hostKey === "string" && hostKey === room.hostKey;
+
+    if (isReservedHost) {
       room.hostSocketId = socket.id;
     }
 
@@ -199,22 +238,26 @@ io.on("connection", (socket) => {
       return;
     }
 
+    const room = rooms.get(roomId);
+
     const text = String(message || "").trim().slice(0, 400);
 
     if (!text) {
       return;
     }
 
+    const timestamp = Date.now();
+
     io.to(roomId).emit("chat-message", {
       username: socket.data.username,
       message: text,
-      timestamp: Date.now(),
+      timestamp,
     });
 
     room.chatHistory.push({
       username: socket.data.username,
       message: text,
-      timestamp: Date.now(),
+      timestamp,
     });
 
     if (room.chatHistory.length > MAX_CHAT_HISTORY) {
