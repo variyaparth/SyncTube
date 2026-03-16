@@ -2,7 +2,7 @@
 # Deploy with: fly deploy
 # https://fly.io/docs/reference/configuration/
 
-app = 'synctube-parth'
+app = 'synctube-parth-2026'
 primary_region = 'bom'
 
 [build]
