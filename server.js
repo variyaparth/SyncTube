@@ -17,6 +17,7 @@ const io = new Server(server, {
   pingTimeout: 20000,
 });
 const MAX_CHAT_HISTORY = 200;
+const HOST_RECONNECT_GRACE_MS = 7000;
 
 // In-memory room store (fine for local dev / single instance deployment).
 const rooms = new Map();
@@ -136,6 +137,15 @@ function appendChatHistory(room, messageEntry) {
   }
 }
 
+function clearPendingHostHandoff(room) {
+  if (room.pendingHostHandoffTimer) {
+    clearTimeout(room.pendingHostHandoffTimer);
+    room.pendingHostHandoffTimer = null;
+  }
+
+  room.pendingHostClientId = null;
+}
+
 app.post("/api/create-room", (req, res) => {
   const roomId = getUniqueRoomId();
   const videoId = sanitizeVideoId(req.body?.videoId);
@@ -145,6 +155,8 @@ app.post("/api/create-room", (req, res) => {
     id: roomId,
     hostSocketId: null,
     hostKey,
+    pendingHostHandoffTimer: null,
+    pendingHostClientId: null,
     videoId,
     users: new Map(),
     chatHistory: [],
@@ -170,7 +182,7 @@ app.get("/api/room/:roomId", (req, res) => {
 });
 
 io.on("connection", (socket) => {
-  socket.on("join-room", ({ roomId, username, hostKey, bootstrapVideoId } = {}) => {
+  socket.on("join-room", ({ roomId, username, hostKey, bootstrapVideoId, clientId } = {}) => {
     const normalizedRoomId = String(roomId || "").trim().toUpperCase();
 
     if (!normalizedRoomId) {
@@ -192,6 +204,8 @@ io.on("connection", (socket) => {
         id: normalizedRoomId,
         hostSocketId: null,
         hostKey: hostKey.trim(),
+        pendingHostHandoffTimer: null,
+        pendingHostClientId: null,
         videoId: safeBootstrapVideoId,
         users: new Map(),
         chatHistory: [],
@@ -205,16 +219,47 @@ io.on("connection", (socket) => {
 
     const room = rooms.get(normalizedRoomId);
     const safeUsername = sanitizeUsername(username);
+    const normalizedClientId =
+      typeof clientId === "string" && clientId.trim()
+        ? clientId.trim().slice(0, 64)
+        : socket.id;
+
+    let duplicateSocketId = null;
+
+    for (const [existingSocketId, existingUser] of room.users.entries()) {
+      if (existingSocketId !== socket.id && existingUser.clientId === normalizedClientId) {
+        duplicateSocketId = existingSocketId;
+        break;
+      }
+    }
+
+    if (duplicateSocketId) {
+      room.users.delete(duplicateSocketId);
+
+      const duplicateSocket = io.sockets.sockets.get(duplicateSocketId);
+
+      if (duplicateSocket) {
+        duplicateSocket.leave(normalizedRoomId);
+      }
+
+      if (room.hostSocketId === duplicateSocketId) {
+        room.hostSocketId = socket.id;
+      }
+    }
 
     socket.join(normalizedRoomId);
     socket.data.roomId = normalizedRoomId;
     socket.data.username = safeUsername;
+    socket.data.clientId = normalizedClientId;
 
-    room.users.set(socket.id, { username: safeUsername });
+    room.users.set(socket.id, { username: safeUsername, clientId: normalizedClientId });
 
     const isReservedHost = typeof hostKey === "string" && hostKey === room.hostKey;
+    const isReturningHostClient =
+      Boolean(room.pendingHostClientId) && room.pendingHostClientId === normalizedClientId;
 
-    if (isReservedHost) {
+    if (isReservedHost || isReturningHostClient) {
+      clearPendingHostHandoff(room);
       room.hostSocketId = socket.id;
     }
 
@@ -385,20 +430,47 @@ io.on("connection", (socket) => {
       io.to(roomId).emit("chat-message", leaveSystemMessage);
     }
 
-    // If host leaves, transfer host role to the first remaining user.
+    // If host leaves, wait briefly for host reconnect before transferring host role.
     if (room.hostSocketId === socket.id) {
-      const nextHost = room.users.keys().next().value || null;
-      room.hostSocketId = nextHost;
+      room.hostSocketId = null;
+      room.pendingHostClientId = leavingUser?.clientId || null;
 
-      if (nextHost) {
-        io.to(roomId).emit("host-changed", {
-          hostSocketId: nextHost,
-          users: serializeUsers(room),
+      clearPendingHostHandoff(room);
+      room.pendingHostClientId = leavingUser?.clientId || null;
+      room.pendingHostHandoffTimer = setTimeout(() => {
+        room.pendingHostHandoffTimer = null;
+
+        if (!rooms.has(roomId)) {
+          return;
+        }
+
+        const currentRoom = rooms.get(roomId);
+
+        if (currentRoom.hostSocketId) {
+          clearPendingHostHandoff(currentRoom);
+          return;
+        }
+
+        const nextHost = currentRoom.users.keys().next().value || null;
+        currentRoom.hostSocketId = nextHost;
+        clearPendingHostHandoff(currentRoom);
+
+        if (nextHost) {
+          io.to(roomId).emit("host-changed", {
+            hostSocketId: nextHost,
+            users: serializeUsers(currentRoom),
+          });
+        }
+
+        io.to(roomId).emit("users-updated", {
+          users: serializeUsers(currentRoom),
+          hostSocketId: currentRoom.hostSocketId,
         });
-      }
+      }, HOST_RECONNECT_GRACE_MS);
     }
 
     if (room.users.size === 0) {
+      clearPendingHostHandoff(room);
       rooms.delete(roomId);
       return;
     }

@@ -115,6 +115,18 @@
     ? sessionStorage.getItem(`synctube-bootstrap-video:${roomId}`) || ""
     : "";
 
+  let clientId = sessionStorage.getItem("synctube-client-id") || "";
+
+  if (!clientId) {
+    if (window.crypto && typeof window.crypto.randomUUID === "function") {
+      clientId = window.crypto.randomUUID();
+    } else {
+      clientId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    }
+
+    sessionStorage.setItem("synctube-client-id", clientId);
+  }
+
   if (!roomId) {
     alert("Missing room ID. Please return to the home page.");
     window.location.href = "/";
@@ -148,6 +160,7 @@
   const loadVideoBtn = document.getElementById("load-video-btn");
   const videoInput = document.getElementById("video-input");
   const videoControls = document.querySelector(".video-controls");
+  const enableAudioBtn = document.getElementById("enable-audio-btn");
 
   let player;
   let isHost = false;
@@ -163,6 +176,7 @@
   let joinRetryTimer = null;
   let playerReady = false;
   let queuedSyncEvent = null;
+  let viewerAudioEnabled = false;
 
   const CLOCK_DRIFT_SOFT_THRESHOLD = 1.2;
   const CLOCK_DRIFT_HARD_THRESHOLD = 2.6;
@@ -253,6 +267,14 @@
     document.body.classList.toggle("host-mode", isHost);
     document.body.classList.toggle("viewer-mode", !isHost);
 
+    if (enableAudioBtn) {
+      if (isHost) {
+        enableAudioBtn.classList.add("hidden");
+      } else if (playerReady && !viewerAudioEnabled) {
+        enableAudioBtn.classList.remove("hidden");
+      }
+    }
+
     if (!isHost) {
       clearInterval(hostHeartbeatInterval);
       clearInterval(hostSeekWatchInterval);
@@ -321,7 +343,7 @@
   }
 
   function emitJoinRoom() {
-    socket.emit("join-room", { roomId, username, hostKey, bootstrapVideoId });
+    socket.emit("join-room", { roomId, username, hostKey, bootstrapVideoId, clientId });
   }
 
   function applyPlaybackState(playback, videoId) {
@@ -392,9 +414,11 @@
       }, 70);
     }
 
-    if (event.isPlaying) {
+    const playerState = player.getPlayerState?.();
+
+    if (event.isPlaying && playerState !== YT.PlayerState.PLAYING) {
       player.playVideo();
-    } else {
+    } else if (!event.isPlaying && playerState === YT.PlayerState.PLAYING) {
       player.pauseVideo();
     }
   }
@@ -446,6 +470,14 @@
         onReady: () => {
           playerReady = true;
 
+          if (!isHost) {
+            player.mute();
+
+            if (enableAudioBtn && !viewerAudioEnabled) {
+              enableAudioBtn.classList.remove("hidden");
+            }
+          }
+
           if (joinedRoomState) {
             applyPlaybackState(joinedRoomState.playback, joinedRoomState.videoId);
           }
@@ -476,6 +508,10 @@
           }
         },
         onStateChange: (event) => {
+          if (!isHost && event.data === YT.PlayerState.BUFFERING) {
+            socket.emit("request-sync");
+          }
+
           if (!isHost || applyingRemoteSync) {
             return;
           }
@@ -552,6 +588,29 @@
       applyingRemoteSync = false;
     }, 180);
   });
+
+  if (enableAudioBtn) {
+    enableAudioBtn.addEventListener("click", () => {
+      if (!player || !playerReady || isHost) {
+        return;
+      }
+
+      viewerAudioEnabled = true;
+      enableAudioBtn.classList.add("hidden");
+
+      if (typeof player.unMute === "function") {
+        player.unMute();
+      }
+
+      if (typeof player.setVolume === "function") {
+        player.setVolume(100);
+      }
+
+      if (player.getPlayerState?.() !== YT.PlayerState.PLAYING) {
+        player.playVideo();
+      }
+    });
+  }
 
   chatForm.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -635,8 +694,8 @@
     addChatMessage({
       username: "System",
       message: amIHost
-        ? "You became the host because the previous host left."
-        : "Host changed because the previous host left.",
+        ? "You are now the host."
+        : "Host changed.",
       timestamp: Date.now(),
       system: true,
     });

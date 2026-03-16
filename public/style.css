@@ -233,6 +233,26 @@ button:disabled {
   display: none;
 }
 
+.enable-audio-btn {
+  position: absolute;
+  left: 50%;
+  bottom: 0.9rem;
+  transform: translateX(-50%);
+  z-index: 6;
+  padding: 0.55rem 0.9rem;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent), white 30%);
+  background: color-mix(in srgb, var(--accent), black 35%);
+  color: #fff;
+  font-size: 0.84rem;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.enable-audio-btn.hidden {
+  display: none;
+}
+
 .side-panel {
   display: grid;
   gap: 1rem;
