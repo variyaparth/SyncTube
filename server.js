@@ -18,6 +18,7 @@ const io = new Server(server, {
 });
 const MAX_CHAT_HISTORY = 200;
 const HOST_RECONNECT_GRACE_MS = 7000;
+const USER_RECONNECT_GRACE_MS = 2500;
 
 // In-memory room store (fine for local dev / single instance deployment).
 const rooms = new Map();
@@ -146,6 +147,29 @@ function clearPendingHostHandoff(room) {
   room.pendingHostClientId = null;
 }
 
+function clearPendingLeaveNotice(room, clientId) {
+  if (!clientId || !room.pendingLeaveNotices?.has(clientId)) {
+    return false;
+  }
+
+  const timer = room.pendingLeaveNotices.get(clientId);
+  clearTimeout(timer);
+  room.pendingLeaveNotices.delete(clientId);
+  return true;
+}
+
+function clearAllPendingLeaveNotices(room) {
+  if (!room.pendingLeaveNotices) {
+    return;
+  }
+
+  for (const timer of room.pendingLeaveNotices.values()) {
+    clearTimeout(timer);
+  }
+
+  room.pendingLeaveNotices.clear();
+}
+
 app.post("/api/create-room", (req, res) => {
   const roomId = getUniqueRoomId();
   const videoId = sanitizeVideoId(req.body?.videoId);
@@ -157,6 +181,7 @@ app.post("/api/create-room", (req, res) => {
     hostKey,
     pendingHostHandoffTimer: null,
     pendingHostClientId: null,
+    pendingLeaveNotices: new Map(),
     videoId,
     users: new Map(),
     chatHistory: [],
@@ -206,6 +231,7 @@ io.on("connection", (socket) => {
         hostKey: hostKey.trim(),
         pendingHostHandoffTimer: null,
         pendingHostClientId: null,
+        pendingLeaveNotices: new Map(),
         videoId: safeBootstrapVideoId,
         users: new Map(),
         chatHistory: [],
@@ -240,6 +266,9 @@ io.on("connection", (socket) => {
 
       if (duplicateSocket) {
         duplicateSocket.leave(normalizedRoomId);
+        duplicateSocket.data.roomId = null;
+        duplicateSocket.data.username = null;
+        duplicateSocket.data.clientId = null;
       }
 
       if (room.hostSocketId === duplicateSocketId) {
@@ -253,6 +282,7 @@ io.on("connection", (socket) => {
     socket.data.clientId = normalizedClientId;
 
     room.users.set(socket.id, { username: safeUsername, clientId: normalizedClientId });
+    const isReconnectJoin = clearPendingLeaveNotice(room, normalizedClientId);
 
     const isReservedHost = typeof hostKey === "string" && hostKey === room.hostKey;
     const isReturningHostClient =
@@ -273,15 +303,17 @@ io.on("connection", (socket) => {
       hostSocketId: room.hostSocketId,
     });
 
-    const joinSystemMessage = {
-      username: "System",
-      message: `${safeUsername} joined the room.`,
-      timestamp: Date.now(),
-      system: true,
-    };
+    if (!isReconnectJoin) {
+      const joinSystemMessage = {
+        username: "System",
+        message: `${safeUsername} joined the room.`,
+        timestamp: Date.now(),
+        system: true,
+      };
 
-    appendChatHistory(room, joinSystemMessage);
-    io.to(normalizedRoomId).emit("chat-message", joinSystemMessage);
+      appendChatHistory(room, joinSystemMessage);
+      io.to(normalizedRoomId).emit("chat-message", joinSystemMessage);
+    }
 
     socket.to(normalizedRoomId).emit("user-joined", {
       username: safeUsername,
@@ -302,6 +334,11 @@ io.on("connection", (socket) => {
     }
 
     const room = rooms.get(roomId);
+    const sender = room.users.get(socket.id);
+
+    if (!sender) {
+      return;
+    }
 
     const text = String(message || "").trim().slice(0, 400);
 
@@ -312,13 +349,13 @@ io.on("connection", (socket) => {
     const timestamp = Date.now();
 
     io.to(roomId).emit("chat-message", {
-      username: socket.data.username,
+      username: sender.username,
       message: text,
       timestamp,
     });
 
     appendChatHistory(room, {
-      username: socket.data.username,
+      username: sender.username,
       message: text,
       timestamp,
     });
@@ -415,19 +452,46 @@ io.on("connection", (socket) => {
     room.users.delete(socket.id);
 
     if (leavingUser) {
-      socket.to(roomId).emit("user-left", {
-        username: leavingUser.username,
-      });
+      const hasAnotherConnectionForClient = [...room.users.values()].some(
+        (user) => user.clientId === leavingUser.clientId
+      );
 
-      const leaveSystemMessage = {
-        username: "System",
-        message: `${leavingUser.username} left the room.`,
-        timestamp: Date.now(),
-        system: true,
-      };
+      if (!hasAnotherConnectionForClient && leavingUser.clientId) {
+        clearPendingLeaveNotice(room, leavingUser.clientId);
 
-      appendChatHistory(room, leaveSystemMessage);
-      io.to(roomId).emit("chat-message", leaveSystemMessage);
+        const pendingTimer = setTimeout(() => {
+          room.pendingLeaveNotices.delete(leavingUser.clientId);
+
+          if (!rooms.has(roomId)) {
+            return;
+          }
+
+          const currentRoom = rooms.get(roomId);
+          const clientStillInRoom = [...currentRoom.users.values()].some(
+            (user) => user.clientId === leavingUser.clientId
+          );
+
+          if (clientStillInRoom) {
+            return;
+          }
+
+          socket.to(roomId).emit("user-left", {
+            username: leavingUser.username,
+          });
+
+          const leaveSystemMessage = {
+            username: "System",
+            message: `${leavingUser.username} left the room.`,
+            timestamp: Date.now(),
+            system: true,
+          };
+
+          appendChatHistory(currentRoom, leaveSystemMessage);
+          io.to(roomId).emit("chat-message", leaveSystemMessage);
+        }, USER_RECONNECT_GRACE_MS);
+
+        room.pendingLeaveNotices.set(leavingUser.clientId, pendingTimer);
+      }
     }
 
     // If host leaves, wait briefly for host reconnect before transferring host role.
@@ -471,6 +535,7 @@ io.on("connection", (socket) => {
 
     if (room.users.size === 0) {
       clearPendingHostHandoff(room);
+      clearAllPendingLeaveNotices(room);
       rooms.delete(roomId);
       return;
     }

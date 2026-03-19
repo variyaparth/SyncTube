@@ -161,6 +161,7 @@
   const videoInput = document.getElementById("video-input");
   const videoControls = document.querySelector(".video-controls");
   const enableAudioBtn = document.getElementById("enable-audio-btn");
+  const syncDebug = document.getElementById("sync-debug");
 
   let player;
   let isHost = false;
@@ -201,6 +202,14 @@
       hour: "2-digit",
       minute: "2-digit",
     });
+  }
+
+  function setSyncDebug(text) {
+    if (!syncDebug) {
+      return;
+    }
+
+    syncDebug.textContent = text;
   }
 
   function addChatMessage({ username: name, message, timestamp, system = false }) {
@@ -266,6 +275,8 @@
 
     document.body.classList.toggle("host-mode", isHost);
     document.body.classList.toggle("viewer-mode", !isHost);
+
+    setSyncDebug(isHost ? "Sync: host controls active" : "Sync: viewer waiting for host updates");
 
     if (enableAudioBtn) {
       if (isHost) {
@@ -352,6 +363,12 @@
     }
 
     applyingRemoteSync = true;
+    setSyncDebug(
+      `Sync: apply state (${playback.isPlaying ? "play" : "pause"}) @ ${Math.max(
+        0,
+        Number(playback.currentTime) || 0
+      ).toFixed(1)}s`
+    );
 
     try {
       if (videoId && typeof player.getVideoData === "function") {
@@ -373,6 +390,12 @@
         player.playVideo();
       } else {
         player.pauseVideo();
+
+        setTimeout(() => {
+          if (!isHost && player && player.getPlayerState?.() !== YT.PlayerState.PAUSED) {
+            player.pauseVideo();
+          }
+        }, 180);
       }
     } finally {
       setTimeout(() => {
@@ -398,6 +421,12 @@
       allowSoftCorrection &&
       Boolean(event.isPlaying);
 
+    setSyncDebug(
+      `Sync: ${event.type || "event"} (${event.isPlaying ? "playing" : "paused"}) drift ${drift.toFixed(
+        2
+      )}s`
+    );
+
     if (shouldSeekHard) {
       applyingRemoteSync = true;
       player.seekTo(expectedTime, true);
@@ -418,8 +447,14 @@
 
     if (event.isPlaying && playerState !== YT.PlayerState.PLAYING) {
       player.playVideo();
-    } else if (!event.isPlaying && playerState === YT.PlayerState.PLAYING) {
+    } else if (!event.isPlaying && playerState !== YT.PlayerState.PAUSED) {
       player.pauseVideo();
+
+      setTimeout(() => {
+        if (!isHost && player && player.getPlayerState?.() !== YT.PlayerState.PAUSED) {
+          player.pauseVideo();
+        }
+      }, 140);
     }
   }
 
@@ -712,8 +747,16 @@
 
     if (!player || !playerReady) {
       queuedSyncEvent = event;
+      setSyncDebug(`Sync: queued ${event.type || "event"} (player loading)`);
       return;
     }
+
+    setSyncDebug(
+      `Sync: recv ${event.type || "event"} @ ${Math.max(
+        0,
+        expectedTimeFromServer(event)
+      ).toFixed(1)}s`
+    );
 
     if (event.type === "load-video") {
       applyPlaybackState(
