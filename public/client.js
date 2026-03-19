@@ -458,6 +458,28 @@
     }
   }
 
+  function applySyncEventForViewer(event, forceSeek = false) {
+    if (!player || isHost) {
+      return;
+    }
+
+    const targetPlayback = {
+      currentTime: expectedTimeFromServer(event),
+      isPlaying: Boolean(event.isPlaying),
+    };
+
+    const currentVideoId =
+      typeof player.getVideoData === "function" ? player.getVideoData()?.video_id : null;
+    const hasVideoChange = Boolean(event.videoId) && currentVideoId !== event.videoId;
+
+    if (hasVideoChange || event.type === "load-video" || event.type === "sync-state") {
+      applyPlaybackState(targetPlayback, event.videoId);
+      return;
+    }
+
+    applyClockCorrection(event, forceSeek);
+  }
+
   function startHostSyncIntervals() {
     clearInterval(hostHeartbeatInterval);
     clearInterval(hostSeekWatchInterval);
@@ -522,17 +544,7 @@
             queuedSyncEvent = null;
 
             if (!isHost) {
-              if (pendingEvent.type === "sync-state") {
-                applyPlaybackState(
-                  {
-                    currentTime: expectedTimeFromServer(pendingEvent),
-                    isPlaying: pendingEvent.isPlaying,
-                  },
-                  pendingEvent.videoId
-                );
-              } else {
-                applyClockCorrection(pendingEvent, pendingEvent.type !== "clock");
-              }
+              applySyncEventForViewer(pendingEvent, pendingEvent.type !== "clock");
             }
           }
 
@@ -759,44 +771,32 @@
     );
 
     if (event.type === "load-video") {
-      applyPlaybackState(
-        {
-          currentTime: expectedTimeFromServer(event),
-          isPlaying: false,
-        },
-        event.videoId
-      );
+      applySyncEventForViewer(event, true);
       return;
     }
 
     if (event.type === "play") {
-      applyClockCorrection(event, true);
+      applySyncEventForViewer(event, true);
       return;
     }
 
     if (event.type === "pause") {
-      applyClockCorrection(event, true);
+      applySyncEventForViewer(event, true);
       return;
     }
 
     if (event.type === "seek") {
-      applyClockCorrection(event, true);
+      applySyncEventForViewer(event, true);
       return;
     }
 
     if (event.type === "clock") {
-      applyClockCorrection(event, false);
+      applySyncEventForViewer(event, false);
       return;
     }
 
     if (event.type === "sync-state") {
-      applyPlaybackState(
-        {
-          currentTime: expectedTimeFromServer(event),
-          isPlaying: event.isPlaying,
-        },
-        event.videoId
-      );
+      applySyncEventForViewer(event, false);
     }
   });
 })();

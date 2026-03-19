@@ -448,6 +448,8 @@ io.on("connection", (socket) => {
 
     const room = rooms.get(roomId);
     const leavingUser = room.users.get(socket.id);
+    const wasHostDisconnect = room.hostSocketId === socket.id;
+    let shouldBroadcastUsersUpdatedNow = true;
 
     room.users.delete(socket.id);
 
@@ -495,9 +497,10 @@ io.on("connection", (socket) => {
     }
 
     // If host leaves, wait briefly for host reconnect before transferring host role.
-    if (room.hostSocketId === socket.id) {
+    if (wasHostDisconnect) {
       room.hostSocketId = null;
       room.pendingHostClientId = leavingUser?.clientId || null;
+      shouldBroadcastUsersUpdatedNow = false;
 
       clearPendingHostHandoff(room);
       room.pendingHostClientId = leavingUser?.clientId || null;
@@ -540,10 +543,12 @@ io.on("connection", (socket) => {
       return;
     }
 
-    io.to(roomId).emit("users-updated", {
-      users: serializeUsers(room),
-      hostSocketId: room.hostSocketId,
-    });
+    if (shouldBroadcastUsersUpdatedNow) {
+      io.to(roomId).emit("users-updated", {
+        users: serializeUsers(room),
+        hostSocketId: room.hostSocketId,
+      });
+    }
   });
 });
 
