@@ -178,11 +178,28 @@
   let playerReady = false;
   let queuedSyncEvent = null;
   let viewerAudioEnabled = false;
+  let lastAppliedSyncSequence = 0;
 
   const CLOCK_DRIFT_SOFT_THRESHOLD = 1.2;
   const CLOCK_DRIFT_HARD_THRESHOLD = 2.6;
+  const PAUSED_DRIFT_THRESHOLD = 0.35;
   const MIN_CORRECTION_INTERVAL_MS = 1200;
   const MAX_JOIN_RETRIES = 8;
+
+  function shouldApplySyncEvent(event) {
+    const incomingSequence = Number(event?.sequence) || 0;
+
+    if (!incomingSequence) {
+      return true;
+    }
+
+    if (incomingSequence <= lastAppliedSyncSequence) {
+      return false;
+    }
+
+    lastAppliedSyncSequence = incomingSequence;
+    return true;
+  }
 
   function expectedTimeFromServer({ currentTime, isPlaying, serverSentAt }) {
     const base = Math.max(0, Number(currentTime) || 0);
@@ -415,8 +432,10 @@
     const drift = Math.abs(localTime - expectedTime);
     const allowSoftCorrection = now - lastViewerCorrectionAt >= MIN_CORRECTION_INTERVAL_MS;
     const shouldSeekHard = forceSeek || drift > CLOCK_DRIFT_HARD_THRESHOLD;
+    const shouldSeekPaused = !event.isPlaying && drift > PAUSED_DRIFT_THRESHOLD;
     const shouldSeekSoft =
       !shouldSeekHard &&
+      !shouldSeekPaused &&
       drift > CLOCK_DRIFT_SOFT_THRESHOLD &&
       allowSoftCorrection &&
       Boolean(event.isPlaying);
@@ -427,7 +446,7 @@
       )}s`
     );
 
-    if (shouldSeekHard) {
+    if (shouldSeekHard || shouldSeekPaused) {
       applyingRemoteSync = true;
       player.seekTo(expectedTime, true);
       lastViewerCorrectionAt = now;
@@ -575,6 +594,10 @@
             emitHostControl("pause", { currentTime });
           }
 
+          if (event.data === YT.PlayerState.ENDED) {
+            emitHostControl("pause", { currentTime });
+          }
+
           if (event.data === YT.PlayerState.BUFFERING) {
             setTimeout(() => {
               if (!isHost || applyingRemoteSync) {
@@ -701,6 +724,7 @@
     joinRetryCount = 0;
 
     joinedRoomState = state;
+    lastAppliedSyncSequence = Number(state.syncSequence) || 0;
     setHostMode(state.isHost);
     renderUsers(state.users, state.hostSocketId);
 
@@ -710,7 +734,17 @@
     });
 
     await youtubeApiReady;
-    buildPlayer(state.videoId);
+
+    if (!player || !playerReady) {
+      buildPlayer(state.videoId);
+      return;
+    }
+
+    applyPlaybackState(state.playback, state.videoId);
+
+    if (!isHost) {
+      socket.emit("request-sync");
+    }
   });
 
   socket.on("users-updated", ({ users, hostSocketId }) => {
@@ -754,6 +788,10 @@
 
   socket.on("sync-event", (event) => {
     if (isHost) {
+      return;
+    }
+
+    if (!shouldApplySyncEvent(event)) {
       return;
     }
 

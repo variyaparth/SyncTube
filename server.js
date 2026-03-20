@@ -105,6 +105,7 @@ function createSyncPayload(room, type, extra = {}) {
 
   return {
     type,
+    sequence: Number(room.playback.sequence) || 0,
     videoId: room.videoId,
     isPlaying: snapshot.isPlaying,
     currentTime: snapshot.currentTime,
@@ -114,11 +115,14 @@ function createSyncPayload(room, type, extra = {}) {
 }
 
 function updatePlaybackFromHost(room, nextPlayback) {
+  const nextSequence = (Number(room.playback?.sequence) || 0) + 1;
+
   room.playback = {
     ...nextPlayback,
     currentTime: Math.max(0, Number(nextPlayback.currentTime) || 0),
     isPlaying: Boolean(nextPlayback.isPlaying),
     lastUpdateAt: Date.now(),
+    sequence: nextSequence,
   };
 }
 
@@ -189,6 +193,7 @@ app.post("/api/create-room", (req, res) => {
       isPlaying: false,
       currentTime: 0,
       lastUpdateAt: Date.now(),
+      sequence: 0,
     },
   });
 
@@ -239,6 +244,7 @@ io.on("connection", (socket) => {
           isPlaying: false,
           currentTime: 0,
           lastUpdateAt: Date.now(),
+          sequence: 0,
         },
       });
     }
@@ -300,6 +306,7 @@ io.on("connection", (socket) => {
       users: serializeUsers(room),
       chatHistory: room.chatHistory,
       playback: getPlaybackSnapshot(room),
+      syncSequence: Number(room.playback.sequence) || 0,
       hostSocketId: room.hostSocketId,
     });
 
